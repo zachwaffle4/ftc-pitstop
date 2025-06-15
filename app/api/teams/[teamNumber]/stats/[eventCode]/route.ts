@@ -11,16 +11,17 @@ export async function GET(request: NextRequest, { params }: { params: { teamNumb
 
     console.log("Fetching stats for team:", teamNumber, "at event:", eventCode)
 
-    // Fetch team's matches to calculate stats
-    const matchesResponse = await fetch(
-      `${FTC_API_BASE}/${season}/matches/${eventCode.toUpperCase()}?teamNumber=${teamNumber}`,
-      {
+    // Fetch team's matches and our custom OPR data
+    const [matchesResponse, oprResponse] = await Promise.all([
+      fetch(`${FTC_API_BASE}/${season}/matches/${eventCode.toUpperCase()}?teamNumber=${teamNumber}`, {
         headers: {
           Authorization: `Basic ${auth}`,
           Accept: "application/json",
         },
-      },
-    )
+      }),
+      // Use our custom OPR calculation
+      fetch(`${request.nextUrl.origin}/api/events/${eventCode}/opr`),
+    ])
 
     let matches = []
     if (matchesResponse.ok) {
@@ -72,32 +73,21 @@ export async function GET(request: NextRequest, { params }: { params: { teamNumb
       }
     })
 
-    // Try to fetch OPR data (this endpoint might not always be available)
+    // Get OPR data from our custom calculation
     let opr = 0,
       dpr = 0,
       ccwm = 0
-    try {
-      const oprResponse = await fetch(
-        `${FTC_API_BASE}/${season}/statistics/OPR/${eventCode.toUpperCase()}?teamNumber=${teamNumber}`,
-        {
-          headers: {
-            Authorization: `Basic ${auth}`,
-            Accept: "application/json",
-          },
-        },
-      )
 
-      if (oprResponse.ok) {
-        const oprData = await oprResponse.json()
-        const teamOpr = oprData.opr?.find((o: any) => o.teamNumber === Number.parseInt(teamNumber))
-        if (teamOpr) {
-          opr = teamOpr.opr || 0
-          dpr = teamOpr.dpr || 0
-          ccwm = teamOpr.ccwm || 0
-        }
+    if (oprResponse.ok) {
+      const oprData = await oprResponse.json()
+      const teamOpr = oprData.opr?.find((o: any) => o.teamNumber === Number.parseInt(teamNumber))
+      if (teamOpr) {
+        opr = teamOpr.opr || 0
+        dpr = teamOpr.dpr || 0
+        ccwm = teamOpr.ccwm || 0
       }
-    } catch (oprError) {
-      console.log("OPR data not available:", oprError)
+    } else {
+      console.log("Custom OPR data not available")
     }
 
     const stats = {
@@ -112,7 +102,7 @@ export async function GET(request: NextRequest, { params }: { params: { teamNumb
       tbp: 0,
     }
 
-    console.log("Calculated stats:", stats)
+    console.log("Calculated stats with custom OPR:", stats)
     return NextResponse.json({ stats })
   } catch (error) {
     console.error("Error fetching team stats:", error)
