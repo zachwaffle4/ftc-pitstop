@@ -13,7 +13,7 @@ export async function GET(request: NextRequest, { params }: { params: { eventCod
 
     console.log("Fetching prediction data for event:", eventCode)
 
-    // Get matches and our custom OPR data
+    // Get matches and OPR data
     const [matchesResponse, oprResponse] = await Promise.all([
       fetch(
         `${FTC_API_BASE}/${season}/matches/${eventCode.toUpperCase()}${teamNumber ? `?teamNumber=${teamNumber}` : ""}`,
@@ -24,8 +24,12 @@ export async function GET(request: NextRequest, { params }: { params: { eventCod
           },
         },
       ),
-      // Use our custom OPR calculation
-      fetch(`${request.nextUrl.origin}/api/events/${eventCode}/opr`),
+      fetch(`${FTC_API_BASE}/${season}/statistics/OPR/${eventCode.toUpperCase()}`, {
+        headers: {
+          Authorization: `Basic ${auth}`,
+          Accept: "application/json",
+        },
+      }),
     ])
 
     let matches = []
@@ -39,8 +43,6 @@ export async function GET(request: NextRequest, { params }: { params: { eventCod
     if (oprResponse.ok) {
       const oprResult = await oprResponse.json()
       oprData = oprResult.opr || []
-    } else {
-      console.log("Custom OPR calculation failed, using fallback prediction method")
     }
 
     // Create OPR lookup map
@@ -78,7 +80,7 @@ export async function GET(request: NextRequest, { params }: { params: { eventCod
           ccwm: 0,
         }
 
-        // Calculate alliance strengths using our custom OPR
+        // Calculate alliance strengths
         const redOPR = red1Stats.opr + red2Stats.opr
         const redDPR = red1Stats.dpr + red2Stats.dpr
         const blueOPR = blue1Stats.opr + blue2Stats.opr
@@ -94,19 +96,6 @@ export async function GET(request: NextRequest, { params }: { params: { eventCod
         const redWinProb = 0.5 + scoreDiff / (2 * uncertainty)
         const clampedRedWinProb = Math.max(0.05, Math.min(0.95, redWinProb))
 
-        // Determine confidence based on data availability
-        let confidence = "low"
-        if (oprData.length > 0) {
-          const hasAllTeamData = [red1Stats, red2Stats, blue1Stats, blue2Stats].every(
-            (stats) => stats.opr > 0 || stats.dpr > 0,
-          )
-          if (hasAllTeamData) {
-            confidence = "high"
-          } else {
-            confidence = "medium"
-          }
-        }
-
         return {
           matchNumber: match.matchNumber,
           description: match.description,
@@ -119,25 +108,15 @@ export async function GET(request: NextRequest, { params }: { params: { eventCod
           predictedBlueScore: Math.round(predictedBlueScore),
           redWinProbability: Math.round(clampedRedWinProb * 100),
           blueWinProbability: Math.round((1 - clampedRedWinProb) * 100),
-          confidence,
+          confidence: oprData.length > 0 ? "medium" : "low",
           tournamentLevel: match.tournamentLevel || "Qualification",
         }
       })
 
-    console.log(`Generated ${predictions.length} match predictions using custom OPR`)
-    return NextResponse.json({
-      predictions,
-      oprCalculation: {
-        method: "custom_matrix_algebra",
-        teamsAnalyzed: oprData.length,
-        dataQuality: oprData.length > 0 ? "good" : "limited",
-      },
-    })
+    console.log(`Generated ${predictions.length} match predictions`)
+    return NextResponse.json({ predictions })
   } catch (error) {
     console.error("Error generating predictions:", error)
-    return NextResponse.json({
-      predictions: [],
-      oprCalculation: { method: "failed", teamsAnalyzed: 0, dataQuality: "none" },
-    })
+    return NextResponse.json({ predictions: [] })
   }
 }
