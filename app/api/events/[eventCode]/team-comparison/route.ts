@@ -2,290 +2,261 @@ import { type NextRequest, NextResponse } from "next/server"
 
 const FTC_API_BASE = "https://ftc-api.firstinspires.org/v2.0"
 
-interface TeamStats {
-  teamNumber: number
-  rank: number | null
-  wins: number
-  losses: number
-  ties: number
-  winRate: number
-  opr: number
-  dpr: number
-  ccwm: number
-  rp: number
-  tbp: number
-  matchesPlayed: number
-  avgScore: number
-  highScore: number
-  category: string
-  percentile: number
-}
-
-interface ComparisonData {
-  currentTeam: TeamStats | null
-  allTeams: TeamStats[]
-  leaderboard: {
-    opr: TeamStats[]
-    winRate: TeamStats[]
-    avgScore: TeamStats[]
-  }
-  similarTeams: TeamStats[]
-}
-
-async function fetchWithAuth(url: string) {
-  const username = process.env.FTC_USERNAME
-  const apiKey = process.env.FTC_API_KEY
-
-  if (!username || !apiKey) {
-    throw new Error("FTC API credentials not configured")
-  }
-
-  const credentials = Buffer.from(`${username}:${apiKey}`).toString("base64")
-
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      "Content-Type": "application/json",
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error(`FTC API error: ${response.status}`)
-  }
-
-  return response.json()
-}
-
-function calculateOPR(matches: any[], teams: number[]) {
-  // Simple OPR calculation - in production, use matrix algebra
-  const teamStats = new Map<number, { totalScore: number; matches: number; opponentScore: number }>()
-
-  // Initialize team stats
-  teams.forEach((team) => {
-    teamStats.set(team, { totalScore: 0, matches: 0, opponentScore: 0 })
-  })
-
-  // Process qualification matches only
-  const qualMatches = matches.filter((match) => match.played && match.tournamentLevel?.toLowerCase().includes("qual"))
-
-  qualMatches.forEach((match) => {
-    const redScore = match.scoreRedFinal || match.redScore || 0
-    const blueScore = match.scoreBlueFinal || match.blueScore || 0
-
-    // Red alliance
-    match.redTeams?.forEach((team: any) => {
-      const teamNum = team.teamNumber || team
-      if (teamStats.has(teamNum)) {
-        const stats = teamStats.get(teamNum)!
-        stats.totalScore += redScore
-        stats.opponentScore += blueScore
-        stats.matches += 1
-      }
-    })
-
-    // Blue alliance
-    match.blueTeams?.forEach((team: any) => {
-      const teamNum = team.teamNumber || team
-      if (teamStats.has(teamNum)) {
-        const stats = teamStats.get(teamNum)!
-        stats.totalScore += blueScore
-        stats.opponentScore += redScore
-        stats.matches += 1
-      }
-    })
-  })
-
-  // Calculate OPR, DPR, CCWM
-  const results = new Map<number, { opr: number; dpr: number; ccwm: number }>()
-
-  teamStats.forEach((stats, teamNum) => {
-    if (stats.matches > 0) {
-      const opr = stats.totalScore / stats.matches
-      const dpr = stats.opponentScore / stats.matches
-      const ccwm = opr - dpr
-
-      results.set(teamNum, { opr, dpr, ccwm })
-    } else {
-      results.set(teamNum, { opr: 0, dpr: 0, ccwm: 0 })
-    }
-  })
-
-  return results
-}
-
-function categorizePerformance(percentile: number): string {
-  if (percentile >= 90) return "Elite"
-  if (percentile >= 75) return "Strong"
-  if (percentile >= 50) return "Average"
-  if (percentile >= 25) return "Developing"
-  return "Needs Work"
-}
-
 export async function GET(request: NextRequest, { params }: { params: { eventCode: string } }) {
+  const { eventCode } = params
+  const searchParams = request.nextUrl.searchParams
+  const teamNumber = searchParams.get("team")
+
   try {
-    const { eventCode } = params
-    const { searchParams } = new URL(request.url)
-    const targetTeamNumber = searchParams.get("team")
+    const season = 2024
+    const auth = Buffer.from(`${process.env.FTC_USERNAME}:${process.env.FTC_API_KEY}`).toString("base64")
 
-    console.log(`Fetching team comparison for event: ${eventCode}`)
+    console.log("Fetching team comparison data for event:", eventCode)
 
-    // Fetch event data
-    const rankingsData = await fetchWithAuth(
-      `${FTC_API_BASE}/${process.env.FTC_SEASON || "2024"}/rankings/${eventCode}`,
-    )
-    const rankings = rankingsData.Rankings || rankingsData.rankings || []
+    // Get rankings, matches, and our custom OPR data
+    const [rankingsResponse, matchesResponse, oprResponse] = await Promise.all([
+      fetch(`${FTC_API_BASE}/${season}/rankings/${eventCode.toUpperCase()}`, {
+        headers: {
+          Authorization: `Basic ${auth}`,
+          Accept: "application/json",
+        },
+      }),
+      fetch(`${FTC_API_BASE}/${season}/matches/${eventCode.toUpperCase()}`, {
+        headers: {
+          Authorization: `Basic ${auth}`,
+          Accept: "application/json",
+        },
+      }),
+      // Use our custom OPR calculation
+      fetch(`${request.nextUrl.origin}/api/events/${eventCode}/opr`),
+    ])
 
-    console.log(`Raw rankings data structure:`, Object.keys(rankingsData))
-    console.log(`Found ${rankings.length} rankings`)
+    let rankings = []
+    let matches = []
+    let oprData = []
 
-    const matchesData = await fetchWithAuth(`${FTC_API_BASE}/${process.env.FTC_SEASON || "2024"}/matches/${eventCode}`)
-    const matches = matchesData.matches || matchesData.Matches || []
-
-    console.log(`Found ${matches.length} matches`)
-
-    const teamsData = await fetchWithAuth(
-      `${FTC_API_BASE}/${process.env.FTC_SEASON || "2024"}/teams?eventCode=${eventCode}`,
-    )
-    const teams = teamsData.teams || teamsData.Teams || []
-
-    console.log(`Found ${teams.length} teams`)
-
-    if (rankings.length === 0) {
-      return NextResponse.json({
-        currentTeam: null,
-        allTeams: [],
-        leaderboard: { opr: [], winRate: [], avgScore: [] },
-        similarTeams: [],
-      })
+    if (rankingsResponse.ok) {
+      const rankingsResult = await rankingsResponse.json()
+      rankings = rankingsResult.Rankings || []
     }
 
-    // Calculate OPR for all teams
-    const teamNumbers = teams.map((t: any) => t.teamNumber)
-    const oprData = calculateOPR(matches, teamNumbers)
+    if (matchesResponse.ok) {
+      const matchesResult = await matchesResponse.json()
+      matches = matchesResult.matches || []
+    }
 
-    // Build team stats
-    const allTeams: TeamStats[] = rankings.map((ranking: any) => {
-      const teamNumber = ranking.teamNumber
-      const opr = oprData.get(teamNumber) || { opr: 0, dpr: 0, ccwm: 0 }
-      const totalMatches = (ranking.wins || 0) + (ranking.losses || 0) + (ranking.ties || 0)
-      const winRate = totalMatches > 0 ? ((ranking.wins || 0) / totalMatches) * 100 : 0
+    if (oprResponse.ok) {
+      const oprResult = await oprResponse.json()
+      oprData = oprResult.opr || []
+    } else {
+      console.log("Custom OPR calculation failed, proceeding without OPR data")
+    }
 
-      // Calculate average score from matches
-      const teamMatches = matches.filter((match: any) => {
-        if (!match.teams || !Array.isArray(match.teams)) return false
+    // Create team statistics map
+    const teamStats = new Map()
 
-        return match.teams.some((t: any) => t.teamNumber === teamNumber)
-      })
-
-      console.log(`Found ${teamMatches.length} matches for team ${teamNumber}`)
-
-      let totalScore = 0
-      let highScore = 0
-      let matchCount = 0
-
-      teamMatches.forEach((match: any) => {
-        if (match.played && match.scoreRedFinal !== null && match.scoreBlueFinal !== null) {
-          const teamInfo = match.teams.find((t: any) => t.teamNumber === teamNumber)
-          if (teamInfo) {
-            const isRed = teamInfo.station?.startsWith("Red")
-            const score = isRed ? match.scoreRedFinal : match.scoreBlueFinal
-
-            totalScore += score
-            highScore = Math.max(highScore, score)
-            matchCount++
-          }
-        }
-      })
-
-      const avgScore = matchCount > 0 ? totalScore / matchCount : 0
-
-      return {
-        teamNumber,
+    // Process rankings
+    rankings.forEach((ranking: any) => {
+      teamStats.set(ranking.teamNumber, {
+        teamNumber: ranking.teamNumber,
         rank: ranking.rank,
+        rp: ranking.rp || 0,
+        tbp: ranking.tbp || 0,
         wins: ranking.wins || 0,
         losses: ranking.losses || 0,
         ties: ranking.ties || 0,
-        winRate,
-        opr: opr.opr,
-        dpr: opr.dpr,
-        ccwm: opr.ccwm,
-        rp: ranking.rp || 0,
-        tbp: ranking.tbp || 0,
-        matchesPlayed: matchCount,
-        avgScore,
-        highScore,
-        category: "",
-        percentile: 0,
-      }
+        played: (ranking.wins || 0) + (ranking.losses || 0) + (ranking.ties || 0),
+        winRate:
+          ranking.wins > 0
+            ? (ranking.wins / ((ranking.wins || 0) + (ranking.losses || 0) + (ranking.ties || 0))) * 100
+            : 0,
+        opr: 0,
+        dpr: 0,
+        ccwm: 0,
+        avgScore: 0,
+        highScore: 0,
+        avgMargin: 0,
+        matchesPlayed: 0,
+      })
     })
 
-    // Calculate percentiles and categories
-    const sortedByOPR = [...allTeams].sort((a, b) => b.opr - a.opr)
-    allTeams.forEach((team) => {
-      const oprRank = sortedByOPR.findIndex((t) => t.teamNumber === team.teamNumber) + 1
-      team.percentile = ((allTeams.length - oprRank + 1) / allTeams.length) * 100
-      team.category = categorizePerformance(team.percentile)
-    })
-
-    // Find current team
-    let currentTeam = null
-    if (targetTeamNumber) {
-      currentTeam = allTeams.find((t) => t.teamNumber === Number.parseInt(targetTeamNumber))
-
-      if (!currentTeam) {
-        // Team might not be in rankings yet, create a basic entry
-        const teamNumber = Number.parseInt(targetTeamNumber)
-        const opr = oprData.get(teamNumber) || { opr: 0, dpr: 0, ccwm: 0 }
-
-        currentTeam = {
-          teamNumber,
-          rank: null,
+    // Add our custom OPR data
+    oprData.forEach((team: any) => {
+      if (teamStats.has(team.teamNumber)) {
+        const stats = teamStats.get(team.teamNumber)
+        stats.opr = team.opr || 0
+        stats.dpr = team.dpr || 0
+        stats.ccwm = team.ccwm || 0
+        stats.matchesPlayed = team.matchesPlayed || 0
+      } else {
+        // Create entry for teams that might not be in rankings yet
+        teamStats.set(team.teamNumber, {
+          teamNumber: team.teamNumber,
+          rank: 999, // Default rank for teams not in rankings
+          rp: 0,
+          tbp: 0,
           wins: 0,
           losses: 0,
           ties: 0,
+          played: 0,
           winRate: 0,
-          opr: opr.opr,
-          dpr: opr.dpr,
-          ccwm: opr.ccwm,
-          rp: 0,
-          tbp: 0,
-          matchesPlayed: 0,
+          opr: team.opr || 0,
+          dpr: team.dpr || 0,
+          ccwm: team.ccwm || 0,
           avgScore: 0,
           highScore: 0,
-          category: "Unranked",
-          percentile: 0,
+          avgMargin: 0,
+          matchesPlayed: team.matchesPlayed || 0,
+        })
+      }
+    })
+
+    // Calculate match-based statistics
+    const teamMatchStats = new Map()
+    matches.forEach((match: any) => {
+      if (!match.teams || match.scoreRedFinal === null || match.scoreBlueFinal === null) return
+
+      match.teams.forEach((teamInfo: any) => {
+        const teamNum = teamInfo.teamNumber
+        if (!teamMatchStats.has(teamNum)) {
+          teamMatchStats.set(teamNum, {
+            scores: [],
+            margins: [],
+          })
         }
+
+        const isRed = teamInfo.station.includes("Red")
+        const teamScore = isRed ? match.scoreRedFinal : match.scoreBlueFinal
+        const opponentScore = isRed ? match.scoreBlueFinal : match.scoreRedFinal
+        const margin = teamScore - opponentScore
+
+        teamMatchStats.get(teamNum).scores.push(teamScore)
+        teamMatchStats.get(teamNum).margins.push(margin)
+      })
+    })
+
+    // Calculate averages and add to team stats
+    teamMatchStats.forEach((matchData, teamNum) => {
+      if (teamStats.has(teamNum)) {
+        const stats = teamStats.get(teamNum)
+        const scores = matchData.scores
+        const margins = matchData.margins
+
+        if (scores.length > 0) {
+          stats.avgScore = scores.reduce((a: number, b: number) => a + b, 0) / scores.length
+          stats.highScore = Math.max(...scores)
+          stats.avgMargin = margins.reduce((a: number, b: number) => a + b, 0) / margins.length
+        }
+      }
+    })
+
+    // Convert to array and sort by rank
+    const allTeams = Array.from(teamStats.values()).sort((a, b) => a.rank - b.rank)
+
+    // Find the specific team if requested
+    const targetTeam = teamNumber ? allTeams.find((t) => t.teamNumber === Number.parseInt(teamNumber)) : null
+
+    // Calculate percentiles for the target team
+    let percentiles = null
+    if (targetTeam) {
+      const calculatePercentile = (value: number, allValues: number[]) => {
+        const sorted = allValues.filter((v) => v > 0).sort((a, b) => a - b)
+        if (sorted.length === 0) return 0
+        const index = sorted.findIndex((v) => v >= value)
+        return index === -1 ? 100 : Math.round((index / sorted.length) * 100)
+      }
+
+      percentiles = {
+        rank: Math.round(((allTeams.length - targetTeam.rank + 1) / allTeams.length) * 100),
+        opr: calculatePercentile(
+          targetTeam.opr,
+          allTeams.map((t) => t.opr),
+        ),
+        dpr:
+          100 -
+          calculatePercentile(
+            targetTeam.dpr,
+            allTeams.map((t) => t.dpr),
+          ), // Lower DPR is better
+        winRate: calculatePercentile(
+          targetTeam.winRate,
+          allTeams.map((t) => t.winRate),
+        ),
+        avgScore: calculatePercentile(
+          targetTeam.avgScore,
+          allTeams.map((t) => t.avgScore),
+        ),
+        avgMargin: calculatePercentile(
+          targetTeam.avgMargin,
+          allTeams.map((t) => t.avgMargin),
+        ),
       }
     }
 
-    // Create leaderboards
-    const leaderboard = {
-      opr: [...allTeams].sort((a, b) => b.opr - a.opr).slice(0, 10),
-      winRate: [...allTeams].sort((a, b) => b.winRate - a.winRate).slice(0, 10),
-      avgScore: [...allTeams].sort((a, b) => b.avgScore - a.avgScore).slice(0, 10),
+    // Get similar teams (teams with similar rank)
+    const similarTeams = targetTeam
+      ? allTeams
+          .filter((t) => t.teamNumber !== targetTeam.teamNumber && Math.abs(t.rank - targetTeam.rank) <= 3)
+          .slice(0, 5)
+      : []
+
+    // Get top performers in each category
+    const topPerformers = {
+      opr: allTeams
+        .filter((t) => t.opr > 0)
+        .sort((a, b) => b.opr - a.opr)
+        .slice(0, 5),
+      dpr: allTeams
+        .filter((t) => t.dpr > 0)
+        .sort((a, b) => a.dpr - b.dpr)
+        .slice(0, 5), // Lower is better
+      winRate: allTeams
+        .filter((t) => t.played >= 3)
+        .sort((a, b) => b.winRate - a.winRate)
+        .slice(0, 5),
+      avgScore: allTeams
+        .filter((t) => t.avgScore > 0)
+        .sort((a, b) => b.avgScore - a.avgScore)
+        .slice(0, 5),
+      highScore: allTeams
+        .filter((t) => t.highScore > 0)
+        .sort((a, b) => b.highScore - a.highScore)
+        .slice(0, 5),
     }
 
-    // Find similar teams (within 10 ranks)
-    let similarTeams: TeamStats[] = []
-    if (currentTeam && currentTeam.rank) {
-      similarTeams = allTeams
-        .filter((team) => {
-          if (!team.rank || team.teamNumber === currentTeam.teamNumber) return false
-          return Math.abs(team.rank - currentTeam.rank!) <= 10
-        })
-        .slice(0, 6)
-    }
-
-    const result: ComparisonData = {
-      currentTeam: currentTeam,
+    console.log(`Generated comparison data for ${allTeams.length} teams with custom OPR`)
+    return NextResponse.json({
+      targetTeam,
       allTeams,
-      leaderboard,
       similarTeams,
-    }
-
-    return NextResponse.json(result)
+      topPerformers,
+      percentiles,
+      eventStats: {
+        totalTeams: allTeams.length,
+        avgOPR:
+          allTeams.filter((t) => t.opr > 0).reduce((sum, t) => sum + t.opr, 0) /
+            allTeams.filter((t) => t.opr > 0).length || 0,
+        avgScore:
+          allTeams.filter((t) => t.avgScore > 0).reduce((sum, t) => sum + t.avgScore, 0) /
+            allTeams.filter((t) => t.avgScore > 0).length || 0,
+        highestScore: Math.max(...allTeams.map((t) => t.highScore)),
+      },
+      oprCalculation: {
+        method: "custom_matrix_algebra",
+        matchesProcessed: matches.filter((m: any) => m.scoreRedFinal !== null && m.scoreBlueFinal !== null).length,
+        teamsAnalyzed: oprData.length,
+      },
+    })
   } catch (error) {
-    console.error("Error in team comparison API:", error)
-    return NextResponse.json({ error: "Failed to fetch team comparison data" }, { status: 500 })
+    console.error("Error generating team comparison:", error)
+    return NextResponse.json({
+      targetTeam: null,
+      allTeams: [],
+      similarTeams: [],
+      topPerformers: { opr: [], dpr: [], winRate: [], avgScore: [], highScore: [] },
+      percentiles: null,
+      eventStats: { totalTeams: 0, avgOPR: 0, avgScore: 0, highestScore: 0 },
+      oprCalculation: { method: "failed", matchesProcessed: 0, teamsAnalyzed: 0 },
+    })
   }
 }

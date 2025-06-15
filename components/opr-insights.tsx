@@ -4,155 +4,159 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Progress } from "@/components/ui/progress"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
-  Calculator,
   TrendingUp,
-  TrendingDown,
   Shield,
   Target,
-  Zap,
-  BarChart3,
-  AlertCircle,
+  Calculator,
   RefreshCw,
+  AlertTriangle,
   Info,
+  Trophy,
+  BarChart3,
+  Zap,
 } from "lucide-react"
 
-interface OPRData {
+interface TeamOPR {
   teamNumber: number
   opr: number
   dpr: number
   ccwm: number
-  rank: number
-  percentile: number
-  matchesAnalyzed: number
-  qualificationMatchesOnly: boolean
-  lastUpdated: string
-  insights: {
-    offensiveRank: number
-    defensiveRank: number
-    consistencyRank: number
-    category: string
-    strengths: string[]
-    improvements: string[]
-  }
-  comparison: {
-    avgOPR: number
-    avgDPR: number
-    avgCCWM: number
-    topOPR: number
-    topDPR: number
-    topCCWM: number
-  }
-  breakdown: {
-    strongMatches: number
-    averageMatches: number
-    weakMatches: number
-    trendDirection: "up" | "down" | "stable"
-  }
+  matchesPlayed: number
 }
 
 interface OPRInsightsProps {
   eventCode: string
-  teamNumber: number
+  teamNumber?: number
+}
+
+interface OPRData {
+  opr: TeamOPR[]
+  matchesProcessed: number
+  teamsAnalyzed: number
+  calculationMethod: string
+  lastUpdated: string
 }
 
 export function OPRInsights({ eventCode, teamNumber }: OPRInsightsProps) {
   const [data, setData] = useState<OPRData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
 
-  const fetchData = async () => {
+  const fetchOPRData = async () => {
     try {
       setError(null)
-      setLoading(true)
+      console.log("Fetching OPR data for event:", eventCode)
 
-      const response = await fetch(`/api/events/${eventCode}/opr?team=${teamNumber}`)
+      const response = await fetch(`/api/events/${eventCode}/opr`)
       const result = await response.json()
 
-      if (!response.ok) {
-        // Handle specific error cases
-        if (result.availableTeams) {
-          setError(
-            `Team ${teamNumber} not found in this event. Available teams include: ${result.availableTeams.join(", ")}${result.totalTeams > 10 ? ` and ${result.totalTeams - 10} more` : ""}.`,
-          )
-        } else if (result.message) {
-          setError(result.message)
-        } else {
-          setError(`Failed to fetch OPR data: ${response.status}`)
-        }
-        return
+      if (response.ok) {
+        setData(result)
+        setLastUpdate(new Date())
+        console.log(`Loaded OPR data for ${result.teamsAnalyzed} teams`)
+      } else {
+        setError("Unable to calculate OPR data")
       }
-
-      setData(result)
     } catch (error) {
-      console.error("Error fetching OPR insights:", error)
-      setError("Failed to load OPR data. Please check your connection and try again.")
+      console.error("Error fetching OPR data:", error)
+      setError("Failed to load OPR data")
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchData()
-  }, [eventCode, teamNumber])
+    fetchOPRData()
 
-  const getPerformanceColor = (percentile: number) => {
-    if (percentile >= 90) return "text-green-600"
-    if (percentile >= 75) return "text-blue-600"
-    if (percentile >= 50) return "text-yellow-600"
-    if (percentile >= 25) return "text-orange-600"
-    return "text-red-600"
+    // Refresh every 3 minutes
+    const interval = setInterval(fetchOPRData, 180000)
+    return () => clearInterval(interval)
+  }, [eventCode])
+
+  const getTeamOPR = (teamNum: number): TeamOPR | null => {
+    return data?.opr.find((team) => team.teamNumber === teamNum) || null
   }
 
-  const getPerformanceLevel = (percentile: number) => {
-    if (percentile >= 90) return "Elite"
-    if (percentile >= 75) return "Strong"
-    if (percentile >= 50) return "Average"
-    if (percentile >= 25) return "Developing"
-    return "Needs Work"
-  }
+  const targetTeam = teamNumber ? getTeamOPR(teamNumber) : null
 
-  const getTrendIcon = (direction: string) => {
-    switch (direction) {
-      case "up":
-        return <TrendingUp className="h-4 w-4 text-green-600" />
-      case "down":
-        return <TrendingDown className="h-4 w-4 text-red-600" />
-      default:
-        return <BarChart3 className="h-4 w-4 text-gray-600" />
-    }
+  const topOPRTeams =
+    data?.opr
+      .slice()
+      .sort((a, b) => b.opr - a.opr)
+      .slice(0, 10) || []
+  const topDPRTeams =
+    data?.opr
+      .slice()
+      .sort((a, b) => a.dpr - b.dpr)
+      .slice(0, 10) || []
+  const topCCWMTeams =
+    data?.opr
+      .slice()
+      .sort((a, b) => b.ccwm - a.ccwm)
+      .slice(0, 10) || []
+
+  const TeamOPRCard = ({ team, rank, metric }: { team: TeamOPR; rank: number; metric: "opr" | "dpr" | "ccwm" }) => {
+    const isTarget = team.teamNumber === teamNumber
+    const value = team[metric]
+    const displayValue = metric === "dpr" ? value.toFixed(1) : value.toFixed(1)
+
+    return (
+      <div
+        className={`flex items-center justify-between p-3 rounded-lg border ${
+          isTarget ? "border-blue-300 bg-blue-50 dark:bg-blue-950" : "border-gray-200 hover:border-gray-300"
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <Badge variant={rank <= 3 ? "default" : "outline"}>#{rank}</Badge>
+          <div>
+            <div className={`font-semibold ${isTarget ? "text-blue-600" : ""}`}>Team {team.teamNumber}</div>
+            <div className="text-sm text-muted-foreground">{team.matchesPlayed} matches</div>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-lg font-bold">{displayValue}</div>
+          <div className="text-xs text-muted-foreground">{metric.toUpperCase()}</div>
+        </div>
+      </div>
+    )
   }
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-6">
-          <div className="flex items-center justify-center py-8">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-              <p>Calculating OPR insights...</p>
-            </div>
-          </div>
+      <div className="text-center py-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p>Calculating OPR statistics...</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <Card className="border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950">
+        <CardContent className="p-6 text-center">
+          <AlertTriangle className="h-8 w-8 text-yellow-600 mx-auto mb-4" />
+          <p className="text-yellow-900 dark:text-yellow-100">{error}</p>
+          <Button variant="outline" onClick={fetchOPRData} className="mt-4">
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Retry
+          </Button>
         </CardContent>
       </Card>
     )
   }
 
-  if (error || !data) {
+  if (!data || data.opr.length === 0) {
     return (
       <Card>
-        <CardContent className="p-6">
-          <div className="flex items-center justify-center py-8">
-            <div className="text-center">
-              <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-4" />
-              <p className="text-red-600 mb-4">{error || "Failed to load OPR data"}</p>
-              <Button onClick={fetchData} variant="outline" size="sm">
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Retry
-              </Button>
-            </div>
-          </div>
+        <CardContent className="p-8 text-center">
+          <Calculator className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+          <h3 className="text-lg font-semibold mb-2">No OPR Data Available</h3>
+          <p className="text-muted-foreground">
+            OPR calculations will appear here once sufficient match data is available.
+          </p>
         </CardContent>
       </Card>
     )
@@ -160,206 +164,178 @@ export function OPRInsights({ eventCode, teamNumber }: OPRInsightsProps) {
 
   return (
     <div className="space-y-6">
-      {/* OPR Overview */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calculator className="h-5 w-5" />
-            OPR Analysis for Team {teamNumber}
-          </CardTitle>
-          <div className="text-sm text-muted-foreground">
-            Based on {data.matchesAnalyzed} qualification matches • Last updated:{" "}
-            {new Date(data.lastUpdated).toLocaleString()}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="grid md:grid-cols-3 gap-6">
-            {/* OPR */}
-            <div className="text-center p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
-              <div className="flex items-center justify-center gap-2 mb-2">
-                <Zap className="h-5 w-5 text-blue-600" />
-                <span className="font-semibold text-blue-600">OPR</span>
-              </div>
-              <div className="text-3xl font-bold text-blue-600 mb-1">{data.opr.toFixed(1)}</div>
-              <div className="text-sm text-muted-foreground mb-2">Offensive Power Rating</div>
-              <Badge variant="outline">Rank #{data.insights.offensiveRank}</Badge>
-              <div className="mt-2">
-                <div className="text-xs text-muted-foreground mb-1">
-                  vs Event Avg: {data.comparison.avgOPR.toFixed(1)}
-                </div>
-                <Progress value={(data.opr / data.comparison.topOPR) * 100} className="h-2" />
-              </div>
-            </div>
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-bold flex items-center gap-2">
+            <Calculator className="h-6 w-6" />
+            OPR Analysis
+          </h2>
+          <p className="text-muted-foreground">
+            Advanced statistics calculated using matrix algebra • {data.teamsAnalyzed} teams analyzed
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={fetchOPRData}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+          <p className="text-xs text-muted-foreground">Updated: {lastUpdate.toLocaleTimeString()}</p>
+        </div>
+      </div>
 
-            {/* DPR */}
-            <div className="text-center p-4 bg-green-50 dark:bg-green-950 rounded-lg">
-              <div className="flex items-center justify-center gap-2 mb-2">
-                <Shield className="h-5 w-5 text-green-600" />
-                <span className="font-semibold text-green-600">DPR</span>
-              </div>
-              <div className="text-3xl font-bold text-green-600 mb-1">{data.dpr.toFixed(1)}</div>
-              <div className="text-sm text-muted-foreground mb-2">Defensive Power Rating</div>
-              <Badge variant="outline">Rank #{data.insights.defensiveRank}</Badge>
-              <div className="mt-2">
-                <div className="text-xs text-muted-foreground mb-1">
-                  vs Event Avg: {data.comparison.avgDPR.toFixed(1)}
-                </div>
-                <Progress value={(data.dpr / Math.max(data.comparison.topDPR, 1)) * 100} className="h-2" />
-              </div>
-            </div>
-
-            {/* CCWM */}
-            <div className="text-center p-4 bg-purple-50 dark:bg-purple-950 rounded-lg">
-              <div className="flex items-center justify-center gap-2 mb-2">
-                <Target className="h-5 w-5 text-purple-600" />
-                <span className="font-semibold text-purple-600">CCWM</span>
-              </div>
-              <div className="text-3xl font-bold text-purple-600 mb-1">{data.ccwm.toFixed(1)}</div>
-              <div className="text-sm text-muted-foreground mb-2">Calculated Contribution to Win Margin</div>
-              <Badge variant="outline">Rank #{data.insights.consistencyRank}</Badge>
-              <div className="mt-2">
-                <div className="text-xs text-muted-foreground mb-1">
-                  vs Event Avg: {data.comparison.avgCCWM.toFixed(1)}
-                </div>
-                <Progress value={Math.max(0, ((data.ccwm + 50) / 100) * 100)} className="h-2" />
-              </div>
+      {/* Calculation Info */}
+      <Card className="bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800">
+        <CardContent className="p-4">
+          <div className="flex items-start gap-3">
+            <Info className="h-5 w-5 text-blue-600 mt-0.5" />
+            <div className="text-sm text-blue-900 dark:text-blue-100">
+              <p className="font-semibold mb-1">Custom OPR Calculation:</p>
+              <p>
+                Using matrix algebra to solve team contributions from {data.matchesProcessed} completed matches. OPR =
+                offensive contribution, DPR = defensive impact, CCWM = calculated contribution to winning margin.
+              </p>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Performance Insights */}
-      <div className="grid md:grid-cols-2 gap-6">
+      {/* Target Team Stats */}
+      {targetTeam && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              Performance Category
+              <Trophy className="h-5 w-5" />
+              Your Team's OPR Statistics
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-center mb-4">
-              <div className={`text-2xl font-bold ${getPerformanceColor(data.percentile)}`}>
-                {data.insights.category}
+            <div className="grid md:grid-cols-3 gap-6">
+              <div className="text-center p-4 bg-green-50 dark:bg-green-950 rounded-lg">
+                <TrendingUp className="h-8 w-8 mx-auto mb-2 text-green-600" />
+                <div className="text-3xl font-bold text-green-600">{targetTeam.opr.toFixed(1)}</div>
+                <div className="text-sm text-muted-foreground">Offensive Power Rating</div>
+                <div className="text-xs text-muted-foreground mt-1">Points contributed per match</div>
               </div>
-              <div className="text-sm text-muted-foreground">{data.percentile.toFixed(0)}th percentile</div>
+              <div className="text-center p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
+                <Shield className="h-8 w-8 mx-auto mb-2 text-blue-600" />
+                <div className="text-3xl font-bold text-blue-600">{targetTeam.dpr.toFixed(1)}</div>
+                <div className="text-sm text-muted-foreground">Defensive Power Rating</div>
+                <div className="text-xs text-muted-foreground mt-1">Opponent points allowed</div>
+              </div>
+              <div className="text-center p-4 bg-purple-50 dark:bg-purple-950 rounded-lg">
+                <Target className="h-8 w-8 mx-auto mb-2 text-purple-600" />
+                <div className="text-3xl font-bold text-purple-600">{targetTeam.ccwm.toFixed(1)}</div>
+                <div className="text-sm text-muted-foreground">CCWM</div>
+                <div className="text-xs text-muted-foreground mt-1">Contribution to winning margin</div>
+              </div>
             </div>
-
-            <div className="space-y-3">
-              <div>
-                <div className="flex justify-between text-sm mb-1">
-                  <span>Overall Performance</span>
-                  <span>{data.percentile.toFixed(0)}%</span>
-                </div>
-                <Progress value={data.percentile} className="h-2" />
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 text-center text-sm">
-                <div className="p-2 bg-green-50 dark:bg-green-950 rounded">
-                  <div className="font-semibold text-green-600">{data.breakdown.strongMatches}</div>
-                  <div className="text-xs text-muted-foreground">Strong</div>
-                </div>
-                <div className="p-2 bg-yellow-50 dark:bg-yellow-950 rounded">
-                  <div className="font-semibold text-yellow-600">{data.breakdown.averageMatches}</div>
-                  <div className="text-xs text-muted-foreground">Average</div>
-                </div>
-                <div className="p-2 bg-red-50 dark:bg-red-950 rounded">
-                  <div className="font-semibold text-red-600">{data.breakdown.weakMatches}</div>
-                  <div className="text-xs text-muted-foreground">Weak</div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-center gap-2 p-2 bg-gray-50 dark:bg-gray-800 rounded">
-                {getTrendIcon(data.breakdown.trendDirection)}
-                <span className="text-sm font-medium">
-                  Performance Trend:{" "}
-                  {data.breakdown.trendDirection.charAt(0).toUpperCase() + data.breakdown.trendDirection.slice(1)}
-                </span>
-              </div>
+            <div className="mt-4 text-center">
+              <Badge variant="outline">Based on {targetTeam.matchesPlayed} matches</Badge>
             </div>
           </CardContent>
         </Card>
+      )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Target className="h-5 w-5" />
-              Strengths & Areas for Improvement
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div>
-                <h4 className="font-semibold text-green-600 mb-2 flex items-center gap-2">
-                  <TrendingUp className="h-4 w-4" />
-                  Strengths
-                </h4>
-                <div className="space-y-1">
-                  {data.insights.strengths.map((strength, index) => (
-                    <div key={index} className="text-sm p-2 bg-green-50 dark:bg-green-950 rounded">
-                      {strength}
-                    </div>
-                  ))}
-                </div>
+      <Tabs defaultValue="opr" className="space-y-4">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="opr" className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4" />
+            Top OPR
+          </TabsTrigger>
+          <TabsTrigger value="dpr" className="flex items-center gap-2">
+            <Shield className="h-4 w-4" />
+            Best Defense
+          </TabsTrigger>
+          <TabsTrigger value="ccwm" className="flex items-center gap-2">
+            <Zap className="h-4 w-4" />
+            Top CCWM
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="opr" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5" />
+                Highest Offensive Power Rating
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {topOPRTeams.map((team, index) => (
+                  <TeamOPRCard key={team.teamNumber} team={team} rank={index + 1} metric="opr" />
+                ))}
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-              <div>
-                <h4 className="font-semibold text-orange-600 mb-2 flex items-center gap-2">
-                  <TrendingUp className="h-4 w-4" />
-                  Areas for Improvement
-                </h4>
-                <div className="space-y-1">
-                  {data.insights.improvements.map((improvement, index) => (
-                    <div key={index} className="text-sm p-2 bg-orange-50 dark:bg-orange-950 rounded">
-                      {improvement}
-                    </div>
-                  ))}
-                </div>
+        <TabsContent value="dpr" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="h-5 w-5" />
+                Best Defensive Performance (Lowest DPR)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {topDPRTeams.map((team, index) => (
+                  <TeamOPRCard key={team.teamNumber} team={team} rank={index + 1} metric="dpr" />
+                ))}
               </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* OPR Explanation */}
+        <TabsContent value="ccwm" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Zap className="h-5 w-5" />
+                Highest Contribution to Winning Margin
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {topCCWMTeams.map((team, index) => (
+                  <TeamOPRCard key={team.teamNumber} team={team} rank={index + 1} metric="ccwm" />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Statistics Summary */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Info className="h-5 w-5" />
-            Understanding OPR Statistics
+            <BarChart3 className="h-5 w-5" />
+            Event Statistics Summary
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid md:grid-cols-3 gap-4 text-sm">
-            <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
-              <div className="font-semibold text-blue-600 mb-2">OPR (Offensive Power Rating)</div>
-              <p className="text-muted-foreground">
-                Measures how many points a team contributes to their alliance's score on average. Higher values indicate
-                stronger offensive capabilities.
-              </p>
+          <div className="grid md:grid-cols-4 gap-4 text-center">
+            <div>
+              <div className="text-2xl font-bold">{data.teamsAnalyzed}</div>
+              <div className="text-sm text-muted-foreground">Teams Analyzed</div>
             </div>
-            <div className="p-3 bg-green-50 dark:bg-green-950 rounded-lg">
-              <div className="font-semibold text-green-600 mb-2">DPR (Defensive Power Rating)</div>
-              <p className="text-muted-foreground">
-                Measures how many points a team prevents opponents from scoring through defense. Higher values indicate
-                better defensive play.
-              </p>
+            <div>
+              <div className="text-2xl font-bold">{data.matchesProcessed}</div>
+              <div className="text-sm text-muted-foreground">Matches Processed</div>
             </div>
-            <div className="p-3 bg-purple-50 dark:bg-purple-950 rounded-lg">
-              <div className="font-semibold text-purple-600 mb-2">CCWM (Calculated Contribution to Win Margin)</div>
-              <p className="text-muted-foreground">
-                Combines offensive and defensive contributions to show overall impact on match outcomes. Positive values
-                help win matches.
-              </p>
+            <div>
+              <div className="text-2xl font-bold">
+                {data.opr.length > 0 ? (data.opr.reduce((sum, t) => sum + t.opr, 0) / data.opr.length).toFixed(1) : "0"}
+              </div>
+              <div className="text-sm text-muted-foreground">Average OPR</div>
             </div>
-          </div>
-
-          <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-            <div className="text-xs text-muted-foreground">
-              <strong>Note:</strong> OPR calculations are based on{" "}
-              {data.qualificationMatchesOnly ? "qualification matches only" : "all completed matches"}
-              and use non-penalty scores when available. Statistics are updated after each match and may fluctuate as
-              more data becomes available.
+            <div>
+              <div className="text-2xl font-bold">
+                {data.opr.length > 0 ? Math.max(...data.opr.map((t) => t.opr)).toFixed(1) : "0"}
+              </div>
+              <div className="text-sm text-muted-foreground">Highest OPR</div>
             </div>
           </div>
         </CardContent>

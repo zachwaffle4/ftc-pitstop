@@ -108,22 +108,6 @@ export default function DashboardPage() {
         alliances: alliancesResponse.status,
       })
 
-      // Add detailed OPR debugging
-      console.log("Attempting to fetch OPR data...")
-      try {
-        const oprTestResponse = await fetch(`/api/events/${eventCode}/opr?team=${teamNumber}`)
-        console.log("OPR API Response status:", oprTestResponse.status)
-        if (!oprTestResponse.ok) {
-          const oprErrorText = await oprTestResponse.text()
-          console.log("OPR API Error response:", oprErrorText)
-        } else {
-          const oprData = await oprTestResponse.json()
-          console.log("OPR API Success:", oprData)
-        }
-      } catch (oprError) {
-        console.error("OPR API Fetch Error:", oprError)
-      }
-
       // Handle each response individually to avoid failing everything if one fails
       let statsData = { stats: null }
       let matchesData = { matches: [] }
