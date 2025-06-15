@@ -19,10 +19,14 @@ import {
   Target,
   Zap,
   ExternalLink,
+  BarChart3,
+  Calculator,
 } from "lucide-react"
 import Link from "next/link"
 import { TournamentBracket } from "@/components/tournament-bracket"
 import { MatchPredictions } from "@/components/match-predictions"
+import { TeamComparison } from "@/components/team-comparison"
+import { OPRInsights } from "@/components/opr-insights"
 
 interface TeamStats {
   wins: number
@@ -103,6 +107,22 @@ export default function DashboardPage() {
         rankings: rankingsResponse.status,
         alliances: alliancesResponse.status,
       })
+
+      // Add detailed OPR debugging
+      console.log("Attempting to fetch OPR data...")
+      try {
+        const oprTestResponse = await fetch(`/api/events/${eventCode}/opr?team=${teamNumber}`)
+        console.log("OPR API Response status:", oprTestResponse.status)
+        if (!oprTestResponse.ok) {
+          const oprErrorText = await oprTestResponse.text()
+          console.log("OPR API Error response:", oprErrorText)
+        } else {
+          const oprData = await oprTestResponse.json()
+          console.log("OPR API Success:", oprData)
+        }
+      } catch (oprError) {
+        console.error("OPR API Fetch Error:", oprError)
+      }
 
       // Handle each response individually to avoid failing everything if one fails
       let statsData = { stats: null }
@@ -502,7 +522,7 @@ export default function DashboardPage() {
           {/* Matches - Right Columns */}
           <div className="lg:col-span-3">
             <Tabs defaultValue="qualification" className="space-y-6">
-              <TabsList className="grid w-full grid-cols-5">
+              <TabsList className="grid w-full grid-cols-7">
                 <TabsTrigger value="qualification" className="flex items-center gap-2">
                   <Target className="h-4 w-4" />
                   Quals ({qualificationMatches.length})
@@ -510,6 +530,14 @@ export default function DashboardPage() {
                 <TabsTrigger value="predictions" className="flex items-center gap-2">
                   <TrendingUp className="h-4 w-4" />
                   Predictions
+                </TabsTrigger>
+                <TabsTrigger value="comparison" className="flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4" />
+                  Compare
+                </TabsTrigger>
+                <TabsTrigger value="opr" className="flex items-center gap-2">
+                  <Calculator className="h-4 w-4" />
+                  OPR
                 </TabsTrigger>
                 <TabsTrigger value="bracket" className="flex items-center gap-2">
                   <Zap className="h-4 w-4" />
@@ -571,6 +599,14 @@ export default function DashboardPage() {
 
               <TabsContent value="predictions" className="space-y-6">
                 <MatchPredictions eventCode={eventCode} teamNumber={teamNumber} />
+              </TabsContent>
+
+              <TabsContent value="comparison" className="space-y-6">
+                <TeamComparison eventCode={eventCode} teamNumber={teamNumber} />
+              </TabsContent>
+
+              <TabsContent value="opr" className="space-y-6">
+                <OPRInsights eventCode={eventCode} teamNumber={teamNumber} />
               </TabsContent>
 
               <TabsContent value="bracket" className="space-y-6">
